@@ -13,13 +13,13 @@ Echo is a payments platform built one stage at a time. The documentation in `doc
 
 Read the constitution before changing anything that touches money.
 
-**Current state: Stage 0 only.** Seven services with health and readiness probes, the shared `internal/platform` package, one database and role per service, migrations, the local stack and CI. There are no business tables. The ledger is Stage 1's job and must not be guessed ahead of it.
+**Current state: Stages 0 and 1.** Seven services with health and readiness probes, the shared `internal/platform` package, one database and role per service, and the ledger: accounts, transactions and entries, with balances derived from entries and the money rules enforced by database triggers. Holds, HTTP handlers and the transfer saga are later stages and must not be guessed ahead of them.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `make verify` | What CI runs: gofmt check, `go vet`, staticcheck, race tests, build |
+| `make verify` | What CI runs: gofmt check, `go vet`, staticcheck, sqlc freshness, race tests, build |
 | `make test` | Unit tests only; no Docker |
 | `make test-race` | Unit tests under the race detector |
 | `make test-integration` | Tests behind the `integration` build tag, against real containers |
@@ -27,6 +27,7 @@ Read the constitution before changing anything that touches money.
 | `make up` | Stack, build, migrate, and run all seven services |
 | `make logs` / `make down` / `make reset` | Follow logs; stop; destroy volumes and rebuild |
 | `make migrate` | Apply every service's embedded migrations |
+| `make generate` | Regenerate the sqlc wallet queries; `make verify` fails when they are stale |
 
 A single test:
 
@@ -69,7 +70,7 @@ These are the constitution's articles where they affect daily work:
 
 - Money is `int64` minor units with a currency. Never a float, a decimal, or an amount without its unit.
 - A balance is derived from entries. Never add a stored balance column; performance is addressed with verified checkpoints, and only in S6.
-- Every transaction's entries sum to zero per currency. The ledger is append-only; corrections are reversals.
+- Every transaction's entries sum to zero per currency. The ledger is append-only; corrections are reversals. The database enforces both with triggers: passing the Go layer is not enough.
 - Every money write is idempotent. A timeout is `Unknown`, never `Failed`; `internal/platform/errors` maps `context.DeadlineExceeded` to `outcome_unknown` and no code may collapse that into a retryable failure.
 - Events leave through the transactional outbox. Never publish to NATS from a request path.
 - One owner per fact: no cross-service database access, no shared tables, no shared domain models.
@@ -97,4 +98,4 @@ These are the constitution's articles where they affect daily work:
 
 ## Deliberately deferred
 
-sqlc and buf generated-code checks, golangci-lint, the contract and end-to-end test tiers, and the deadline-to-unknown lint rule arrive with the stages that need them. Do not add a gate that has nothing to check.
+buf generated-code checks, golangci-lint, the contract and end-to-end test tiers, and the deadline-to-unknown lint rule arrive with the stages that need them. Do not add a gate that has nothing to check.
