@@ -10,6 +10,16 @@ import (
 
 const module = "github.com/donaina/echo/"
 
+// A pure domain package may not import a database driver, a broker or a
+// router. Persistence and transport are adapters behind interfaces it owns.
+var bannedImports = map[string][]string{
+	"ledger": {
+		"github.com/jackc/pgx",
+		"github.com/nats-io",
+		"github.com/go-chi",
+	},
+}
+
 // TestImportBoundaries walks the real import graph. It is a static check, so
 // it runs in the fast suite and fails the build, not a review.
 func TestImportBoundaries(t *testing.T) {
@@ -28,6 +38,11 @@ func TestImportBoundaries(t *testing.T) {
 			continue
 		}
 		for _, imp := range strings.Split(imports, ",") {
+			for _, banned := range bannedImports[owner] {
+				if strings.HasPrefix(imp, banned) {
+					t.Errorf("%s imports %s: the %s domain stays free of drivers and transports", pkg, imp, owner)
+				}
+			}
 			target, ok := internalOwner(imp)
 			if !ok {
 				continue

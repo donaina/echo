@@ -47,6 +47,7 @@ const (
 	TokenExpired           Code = "token_expired"
 	Forbidden              Code = "forbidden"
 	AccountNotFound        Code = "account_not_found"
+	TransactionNotFound    Code = "transaction_not_found"
 	TransferNotFound       Code = "transfer_not_found"
 	MethodNotAllowed       Code = "method_not_allowed"
 	Conflict               Code = "conflict"
@@ -86,6 +87,7 @@ var specs = map[Code]spec{
 	TokenExpired:           {http.StatusUnauthorized, Rejection, "Token expired"},
 	Forbidden:              {http.StatusForbidden, Rejection, "Forbidden"},
 	AccountNotFound:        {http.StatusNotFound, Rejection, "Account not found"},
+	TransactionNotFound:    {http.StatusNotFound, Rejection, "Transaction not found"},
 	TransferNotFound:       {http.StatusNotFound, Rejection, "Transfer not found"},
 	MethodNotAllowed:       {http.StatusMethodNotAllowed, Rejection, "Method not allowed"},
 	Conflict:               {http.StatusConflict, Rejection, "Conflict"},

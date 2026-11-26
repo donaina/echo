@@ -10,7 +10,7 @@ DB_SERVICES := auth wallet transfer notification webhook recon
 RUN_DIR     := .run
 
 .PHONY: all build fmt fmt-check lint test test-race test-integration verify \
-        infra migrate up down reset logs clean
+        generate generate-check infra migrate up down reset logs clean
 
 all: build
 
@@ -45,7 +45,16 @@ test-race:
 test-integration:
 	$(GO) test -tags=integration -count=1 -p 2 ./...
 
-verify: fmt-check lint test-race build
+## Regenerate the code that is generated, and prove it is committed.
+generate:
+	$(GO) tool sqlc generate
+
+generate-check:
+	@$(GO) tool sqlc generate
+	@git diff --exit-code -- internal/wallet/walletdb \
+		|| (echo "generated code is stale: run make generate and commit it"; exit 1)
+
+verify: fmt-check lint generate-check test-race build
 
 ## Local infrastructure: PostgreSQL, NATS with JetStream, Redis.
 infra:

@@ -1,0 +1,11 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "db/wallet/migrations"
+    queries: "db/wallet/queries"
+    gen:
+      go:
+        package: "walletdb"
+        out: "internal/wallet/walletdb"
+        sql_package: "pgx/v5"
+        emit_pointers_for_null_types: true
