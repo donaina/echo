@@ -55,6 +55,7 @@ What this makes easy, what it makes hard, and what we will have to live with.
 | [0006](0006-posting-adapter-sends-business-operations.md) | The posting adapter sends business operations, not GL legs | Accepted |
 | [0007](0007-single-tenant-first.md) | Single-tenant data model first, tenant column from day one | Accepted |
 | [0008](0008-verified-checkpoints-not-stored-balances.md) | Balances are derived; checkpoints are a verified cache | Accepted |
+| [0009](0009-row-locks-not-serializable.md) | Row locks, not serializable, for money movements | Accepted |
 
 ## When to write one
 

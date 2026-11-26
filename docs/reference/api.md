@@ -146,6 +146,12 @@ JavaScript.
 
 ### Wallet (`/v1/wallets`)
 
+**Stage 2 boundary.** The money endpoints below are served on the wallet's **internal
+port**, not the public edge, behind `X-Echo-Service-Token` and `X-Echo-Caller`. They
+are **not idempotent** until Stage 3: there is no `Idempotency-Key` yet, so a retried
+request is a second movement. Do not publish these routes before the gateway and
+idempotency land. The `Auth` column describes the target state from Stage 4.
+
 | Method | Path | Auth | Idempotent | Purpose |
 |---|---|---|---|---|
 | GET | `/{id}` | owner | — | Balances and status |
@@ -170,6 +176,30 @@ Wallet response:
 
 `ledger_balance − available_balance` is always the sum of open holds. If a client sees
 otherwise, it is a bug and should be reported with both values.
+
+Entries response (Stage 2 shape; newest first, cursor on `created_at` and `id`):
+
+```json
+{
+  "items": [
+    {
+      "id": "01J9D...",
+      "transaction_id": "01J9C...",
+      "operation_type": "internal-transfer",
+      "delta_minor": -25000,
+      "currency": "NGN",
+      "reference": "rent-november",
+      "counterparty": "01J8Y...",
+      "created_at": "2026-11-24T09:31:07.412Z"
+    }
+  ],
+  "next_cursor": "eyJ0IjoiMjAyNi0xMS0yNFQwOTozMSJ9",
+  "has_more": true
+}
+```
+
+`counterparty` is the account on the other side of the transaction, and is empty for a
+transaction whose legs all touch the same account.
 
 ### Transfers (`/v1/transfers`)
 
