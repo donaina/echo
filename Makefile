@@ -79,12 +79,16 @@ up: infra build migrate
 		nohup env "$$(echo $$s | tr '[:lower:]' '[:upper:]')_DATABASE_URL=$$url" \
 			WALLET_SERVICE_TOKEN="$${WALLET_SERVICE_TOKEN:-local-dev-service-token}" \
 			WALLET_INTERNAL_ADDR="$${WALLET_INTERNAL_ADDR:-:8182}" \
+			WALLET_URL="$${WALLET_URL:-http://localhost:8182}" \
+			TRANSFER_SERVICE_TOKEN="$${TRANSFER_SERVICE_TOKEN:-local-dev-service-token}" \
+			TRANSFER_INTERNAL_ADDR="$${TRANSFER_INTERNAL_ADDR:-:8183}" \
 			./bin/$$s >>$(RUN_DIR)/$$s.log 2>&1 & \
 		echo $$! > $(RUN_DIR)/$$s.pid; \
 		echo "$$s started (log: $(RUN_DIR)/$$s.log)"; \
 	done
 	@echo "health: http://localhost:8080/healthz   metrics: http://localhost:9080/metrics"
 	@echo "wallet internal API: http://localhost:8182 (X-Echo-Service-Token required)"
+	@echo "transfer internal API: http://localhost:8183 (X-Echo-Service-Token required)"
 
 ## Stop the services we started, then the stack. Data is kept.
 down:

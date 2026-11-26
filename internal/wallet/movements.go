@@ -96,12 +96,12 @@ func (s *Store) Withdraw(ctx context.Context, walletID string, amount ledger.Amo
 		if err := creditable(dest); err != nil {
 			return err
 		}
-		balance, err := q.GetAccountBalance(ctx, source.ID)
+		available, err := availableIn(ctx, q, source.ID)
 		if err != nil {
 			return err
 		}
-		if ledger.AmountMinor(balance) < amount {
-			return insufficient(balance, amount, source.Currency)
+		if available < int64(amount) {
+			return insufficient(available, amount, source.Currency)
 		}
 		tx, err := ledger.Build([]ledger.Leg{
 			{AccountID: source.ID, DeltaMinor: -amount, Currency: source.Currency},
@@ -157,12 +157,12 @@ func (s *Store) InternalTransfer(ctx context.Context, fromID, toID string, amoun
 		if err := creditable(dest); err != nil {
 			return err
 		}
-		balance, err := q.GetAccountBalance(ctx, source.ID)
+		available, err := availableIn(ctx, q, source.ID)
 		if err != nil {
 			return err
 		}
-		if ledger.AmountMinor(balance) < amount {
-			return insufficient(balance, amount, source.Currency)
+		if available < int64(amount) {
+			return insufficient(available, amount, source.Currency)
 		}
 		tx, err := ledger.Build([]ledger.Leg{
 			{AccountID: source.ID, DeltaMinor: -amount, Currency: source.Currency},

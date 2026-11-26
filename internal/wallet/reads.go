@@ -28,10 +28,14 @@ func (s *Store) Wallet(ctx context.Context, id string) (WalletView, error) {
 	if err != nil {
 		return WalletView{}, err
 	}
+	holds, err := s.q.OpenHoldTotal(ctx, id)
+	if err != nil {
+		return WalletView{}, mapError(err)
+	}
 	return WalletView{
 		Account:          account,
 		LedgerBalance:    balance,
-		AvailableBalance: balance,
+		AvailableBalance: balance - ledger.AmountMinor(holds),
 	}, nil
 }
 

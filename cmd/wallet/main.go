@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	walletmigrations "github.com/donaina/echo/db/wallet"
 	"github.com/donaina/echo/internal/platform/config"
 	"github.com/donaina/echo/internal/platform/httpserver"
+	"github.com/donaina/echo/internal/platform/idempotency"
 	"github.com/donaina/echo/internal/platform/logging"
 	"github.com/donaina/echo/internal/platform/migrate"
 	"github.com/donaina/echo/internal/platform/postgres"
@@ -105,8 +107,14 @@ func run() error {
 
 	// The public port serves health and nothing else until Stage 4. The money
 	// API lives on the internal port, behind the service token.
-	svc := wallet.NewService(wallet.NewStore(pool))
-	internal := wallet.NewHandler(svc, serviceToken)
+	store := wallet.NewStore(pool)
+	svc := wallet.NewService(store)
+	idemStore := idempotency.NewStore(pool)
+	internal := wallet.NewHandler(svc, serviceToken, idempotency.NewMiddleware(idemStore, logger))
+
+	// Two housekeeping loops: expired idempotency keys, and holds whose saga
+	// died. Both are safety nets, not the primary path.
+	go sweep(ctx, logger, store, idemStore)
 
 	srv := httpserver.New(httpserver.Options{
 		Service:         "wallet",
@@ -124,4 +132,24 @@ func run() error {
 	logger.Info("starting",
 		"addr", cfg.HTTPAddr, "internal_addr", internalAddr, "metrics_addr", cfg.MetricsAddr)
 	return srv.Run(ctx)
+}
+
+func sweep(ctx context.Context, logger *slog.Logger, store *wallet.Store, keys *idempotency.Store) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n, err := store.ExpireHolds(ctx); err != nil {
+				logger.Warn("expire holds", "err", err)
+			} else if n > 0 {
+				logger.Info("expired holds", "count", n)
+			}
+			if _, err := keys.Sweep(ctx); err != nil {
+				logger.Warn("sweep idempotency keys", "err", err)
+			}
+		}
+	}
 }

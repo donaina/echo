@@ -13,7 +13,7 @@ Echo is a payments platform built one stage at a time. The documentation in `doc
 
 Read the constitution before changing anything that touches money.
 
-**Current state: Stages 0–2.** Seven services with health and readiness probes, the shared `internal/platform` package, one database and role per service, the ledger (accounts, transactions, entries, derived balances), and the wallet's internal HTTP API: fund, withdraw, internal transfer, wallet and entry reads. Holds, the public edge and the transfer saga are later stages and must not be guessed ahead of them.
+**Current state: Stages 0–3.** Seven services with health and readiness probes, the shared `internal/platform` package, one database and role per service, the ledger (accounts, transactions, entries, derived balances, holds), idempotency keys on every money write, and the transfer saga with a stub destination. Terminal events are written to the outbox; publishing them is Stage 5, and the public edge is Stage 4.
 
 ## Commands
 
@@ -84,6 +84,8 @@ These are the constitution's articles where they affect daily work:
 - **Metrics**: named `echo_<subsystem>_<name>_<unit>`. Labels stay bounded — route patterns, never raw paths or account ids.
 - **Migrations**: goose, one directory per service, forward-only in production. Adding a non-null column to a large table is three migrations, not one.
 - **Money writes**: a balance-checked movement goes through `withAccountLocks`; it is the only path that takes `FOR UPDATE`, and it locks in sorted order. Do not add another writer of entries that bypasses it.
+- **Idempotency**: every HTTP money write is wrapped in `internal/platform/idempotency` and requires `Idempotency-Key`; holds, captures and reversals are idempotent by their own identity instead. A new money route without one of the two is a bug.
+- **Sagas**: the transfer service owns lifecycle state and no balance. Every step is safe to repeat, and a timeout from the remote destination is `Unknown` — never compensate it.
 - **Tests**: integration tests carry `//go:build integration` and use `internal/platform/testkit` for containers. Tests build state through the ledger; they never insert entries directly.
 - **Dependencies**: the standard library first. A new dependency is a permanent cost and needs a reason in the pull request.
 
@@ -96,7 +98,7 @@ These are the constitution's articles where they affect daily work:
 
 ## Local stack
 
-`make up` provides PostgreSQL 17 on 5432 (one database and role per service), NATS with JetStream on 4222 (monitoring 8222), and Redis on 6379. Service ports are HTTP/metrics: gateway 8080/9080, auth 8081/9081, wallet 8082/9082, transfer 8083/9083, notification 8084/9084, webhook 8085/9085, recon 8086/9086. The wallet's money API is on its internal port, 8182, behind `X-Echo-Service-Token` (`make up` defaults it to `local-dev-service-token`) and requires `X-Echo-Caller`. Only the gateway is public in production. `deploy/compose/README.md` has the local credentials and the reset procedure.
+`make up` provides PostgreSQL 17 on 5432 (one database and role per service), NATS with JetStream on 4222 (monitoring 8222), and Redis on 6379. Service ports are HTTP/metrics: gateway 8080/9080, auth 8081/9081, wallet 8082/9082, transfer 8083/9083, notification 8084/9084, webhook 8085/9085, recon 8086/9086. The wallet's money API is on its internal port, 8182, and the transfer saga API on 8183, both behind `X-Echo-Service-Token` (`make up` defaults it to `local-dev-service-token`) and requiring `X-Echo-Caller`; the transfer service calls the wallet at `WALLET_URL`. Only the gateway is public in production. `deploy/compose/README.md` has the local credentials and the reset procedure.
 
 ## Deliberately deferred
 

@@ -1,32 +1,41 @@
 package wallet
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/donaina/echo/internal/ledger"
 	apperr "github.com/donaina/echo/internal/platform/errors"
+	"github.com/donaina/echo/internal/platform/idempotency"
+	"github.com/donaina/echo/internal/platform/servicetoken"
 )
 
 // NewHandler returns the wallet's internal HTTP face. Every route requires
 // the shared service token and a caller identity: until Stage 4 there is no
 // user authentication, and this boundary is deliberately temporary.
-func NewHandler(svc *Service, serviceToken string) *http.ServeMux {
+func NewHandler(svc *Service, serviceToken string, idem *idempotency.Middleware) *http.ServeMux {
 	h := &handler{svc: svc}
 	mux := http.NewServeMux()
-	guard := func(fn http.HandlerFunc) http.Handler {
-		return requireServiceToken(serviceToken, fn)
+	guard := func(next http.Handler) http.Handler {
+		return servicetoken.Require(serviceToken, next)
 	}
-	mux.Handle("POST /wallets/{id}/fund", guard(h.fund))
-	mux.Handle("POST /wallets/{id}/withdraw", guard(h.withdraw))
-	mux.Handle("POST /transfers/internal", guard(h.transfer))
-	mux.Handle("GET /wallets/{id}", guard(h.wallet))
-	mux.Handle("GET /wallets/{id}/entries", guard(h.entries))
+	money := func(next http.Handler) http.Handler {
+		if idem != nil {
+			next = idem.Handler(next)
+		}
+		return guard(next)
+	}
+	mux.Handle("POST /wallets/{id}/fund", money(http.HandlerFunc(h.fund)))
+	mux.Handle("POST /wallets/{id}/withdraw", money(http.HandlerFunc(h.withdraw)))
+	mux.Handle("POST /transfers/internal", money(http.HandlerFunc(h.transfer)))
+	mux.Handle("GET /wallets/{id}", guard(http.HandlerFunc(h.wallet)))
+	mux.Handle("GET /wallets/{id}/entries", guard(http.HandlerFunc(h.entries)))
+	mux.Handle("POST /holds", guard(http.HandlerFunc(h.placeHold)))
+	mux.Handle("POST /holds/{id}/capture", guard(http.HandlerFunc(h.capture)))
+	mux.Handle("POST /holds/{id}/release", guard(http.HandlerFunc(h.release)))
+	mux.Handle("POST /transactions/{id}/reverse", guard(http.HandlerFunc(h.reverse)))
 	return mux
 }
 
@@ -68,7 +77,7 @@ func (h *handler) fund(w http.ResponseWriter, r *http.Request) {
 		Currency:    req.Currency,
 		SourceRef:   req.SourceRef,
 		Reference:   req.Reference,
-	}, caller(r), correlation(r))
+	}, servicetoken.Caller(r), servicetoken.Correlation(r))
 	if err != nil {
 		apperr.Write(w, r, err)
 		return
@@ -88,7 +97,7 @@ func (h *handler) withdraw(w http.ResponseWriter, r *http.Request) {
 		Currency:       req.Currency,
 		DestinationRef: req.DestinationRef,
 		Reference:      req.Reference,
-	}, caller(r), correlation(r))
+	}, servicetoken.Caller(r), servicetoken.Correlation(r))
 	if err != nil {
 		apperr.Write(w, r, err)
 		return
@@ -102,7 +111,7 @@ func (h *handler) transfer(w http.ResponseWriter, r *http.Request) {
 		apperr.Write(w, r, err)
 		return
 	}
-	tx, err := h.svc.Transfer(r.Context(), TransferCommand(req), caller(r), correlation(r))
+	tx, err := h.svc.Transfer(r.Context(), TransferCommand(req), servicetoken.Caller(r), servicetoken.Correlation(r))
 	if err != nil {
 		apperr.Write(w, r, err)
 		return
@@ -160,6 +169,109 @@ func (h *handler) entries(w http.ResponseWriter, r *http.Request) {
 		NextCursor: page.NextCursor,
 		HasMore:    page.HasMore,
 	})
+}
+
+type holdRequest struct {
+	HoldID      string `json:"hold_id"`
+	AccountID   string `json:"account_id"`
+	AmountMinor int64  `json:"amount_minor"`
+	Currency    string `json:"currency"`
+	Reference   string `json:"reference"`
+	TTLSeconds  int64  `json:"ttl_seconds"`
+}
+
+type releaseRequest struct {
+	Reason string `json:"reason"`
+}
+
+type reverseRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *handler) placeHold(w http.ResponseWriter, r *http.Request) {
+	req, err := decode[holdRequest](w, r)
+	if err != nil {
+		apperr.Write(w, r, err)
+		return
+	}
+	hold, err := h.svc.PlaceHold(r.Context(), HoldCommand{
+		HoldID:      req.HoldID,
+		AccountID:   req.AccountID,
+		AmountMinor: req.AmountMinor,
+		Currency:    req.Currency,
+		Reference:   req.Reference,
+		TTL:         time.Duration(req.TTLSeconds) * time.Second,
+	}, servicetoken.Caller(r))
+	if err != nil {
+		apperr.Write(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, holdBody(hold))
+}
+
+func (h *handler) capture(w http.ResponseWriter, r *http.Request) {
+	hold, tx, err := h.svc.Capture(r.Context(), r.PathValue("id"))
+	if err != nil {
+		apperr.Write(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, captureResponse{Hold: holdBody(hold), Transaction: movement(tx)})
+}
+
+func (h *handler) release(w http.ResponseWriter, r *http.Request) {
+	// The body is optional; an empty one is a release with no note.
+	_, _ = decode[releaseRequest](w, r)
+	hold, err := h.svc.Release(r.Context(), r.PathValue("id"))
+	if err != nil {
+		apperr.Write(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, holdBody(hold))
+}
+
+func (h *handler) reverse(w http.ResponseWriter, r *http.Request) {
+	req, err := decode[reverseRequest](w, r)
+	if err != nil {
+		apperr.Write(w, r, err)
+		return
+	}
+	tx, err := h.svc.Reverse(r.Context(), r.PathValue("id"), req.Reason, servicetoken.Caller(r), servicetoken.Correlation(r))
+	if err != nil {
+		apperr.Write(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, movement(tx))
+}
+
+type holdResponse struct {
+	ID            string    `json:"id"`
+	AccountID     string    `json:"account_id"`
+	AmountMinor   int64     `json:"amount_minor"`
+	Currency      string    `json:"currency"`
+	Reference     string    `json:"reference,omitempty"`
+	Status        string    `json:"status"`
+	TransactionID *string   `json:"transaction_id,omitempty"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type captureResponse struct {
+	Hold        holdResponse     `json:"hold"`
+	Transaction movementResponse `json:"transaction"`
+}
+
+func holdBody(h ledger.Hold) holdResponse {
+	return holdResponse{
+		ID:            h.ID,
+		AccountID:     h.AccountID,
+		AmountMinor:   int64(h.AmountMinor),
+		Currency:      h.Currency,
+		Reference:     h.Reference,
+		Status:        string(h.Status),
+		TransactionID: h.TransactionID,
+		ExpiresAt:     h.ExpiresAt,
+		CreatedAt:     h.CreatedAt,
+	}
 }
 
 type walletResponse struct {
@@ -231,38 +343,6 @@ func currencyOf(tx ledger.Transaction) string {
 		return ""
 	}
 	return tx.Entries[0].Currency
-}
-
-func caller(r *http.Request) string {
-	return strings.TrimSpace(r.Header.Get("X-Echo-Caller"))
-}
-
-func correlation(r *http.Request) string {
-	if c := r.Header.Get("X-Correlation-Id"); c != "" {
-		return c
-	}
-	if id := r.Header.Get("X-Request-Id"); id != "" {
-		return id
-	}
-	return "uncorrelated"
-}
-
-// requireServiceToken compares hashes in constant time, so the comparison
-// does not reveal the token's length or a matching prefix.
-func requireServiceToken(token string, next http.Handler) http.Handler {
-	want := sha256.Sum256([]byte(token))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := sha256.Sum256([]byte(r.Header.Get("X-Echo-Service-Token")))
-		if token == "" || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-			apperr.Write(w, r, apperr.New(apperr.Unauthenticated, "a valid service token is required"))
-			return
-		}
-		if caller(r) == "" {
-			apperr.Write(w, r, validation("X-Echo-Caller", "the caller identity is required"))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func decode[T any](w http.ResponseWriter, r *http.Request) (T, error) {
