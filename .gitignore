@@ -1,0 +1,10 @@
+# Build output and local run state
+/bin/
+/.run/
+*.log
+
+# Secrets never enter the repository
+/secrets/
+.env
+
+.DS_Store
