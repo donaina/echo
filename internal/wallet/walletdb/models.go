@@ -30,6 +30,34 @@ type Entry struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Hold struct {
+	ID            string
+	TenantID      string
+	AccountID     string
+	AmountMinor   int64
+	Currency      string
+	Reference     string
+	CreatedBy     string
+	Status        string
+	TransactionID *string
+	ExpiresAt     pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type IdempotencyKey struct {
+	ID                 string
+	IdempotencyKey     string
+	Scope              string
+	RequestFingerprint string
+	Status             string
+	ResponseStatus     *int32
+	ResponseBody       *string
+	ResourceID         *string
+	CreatedAt          pgtype.Timestamptz
+	ExpiresAt          pgtype.Timestamptz
+}
+
 type Transaction struct {
 	ID            string
 	TenantID      string

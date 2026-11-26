@@ -48,7 +48,7 @@ CREATE TABLE idempotency_keys (
   request_fingerprint   TEXT NOT NULL,          -- SHA-256 over method, path, canonical body
   status                TEXT NOT NULL,          -- 'in_progress' | 'completed'
   response_status       INT,
-  response_body         JSONB,
+  response_body         TEXT,    -- verbatim; jsonb would reorder the keys
   resource_id           TEXT,                   -- what was created, if anything
   created_at            TIMESTAMPTZ NOT NULL,
   expires_at            TIMESTAMPTZ NOT NULL,
@@ -123,17 +123,22 @@ A transfer whose destination may be remote is a state machine persisted in
 `transfer_sagas`, driven by a worker, not by the request goroutine.
 
 ```
-Received
-  → Validated          (currency, amount, participants exist)
+Received               (validated at creation: currency, amount, participants)
   → Reserved           (hold at source; the only step that needs the source lock)
-  → Debiting           (capture the hold: source entries written)
-  → Crediting          (call the remote destination)
-  → Completed          (or → Compensating)
+  → Debited            (hold captured; source entries written)
+  → Completed          (or → Compensating on a rejection, → Resolving on unknown)
 ```
 
-- [ ] `transfer_sagas` table: `id`, `state`, `request` (JSONB), `idempotency_key_id`,
-      `hold_id`, `attempts`, `next_attempt_at`, `last_error`, `remote_ref`,
-      `created_at`, `updated_at`.
+As built, validation happens before the saga exists, and `Debiting` and `Crediting`
+collapse into `debited`: the capture is itself a persisted state, so a worker that
+dies between the capture and the remote call resumes at the credit without a second
+debit.
+
+- [ ] `transfer_sagas` table: `id`, `state`, `request` (JSONB), `created_by`,
+      `correlation_id`, `hold_id`, `capture_tx_id`, `attempts`, `next_attempt_at`,
+      `last_error`, `remote_ref`, `failure_reason`, `created_at`, `updated_at`.
+      The idempotency key lives in the service's `idempotency_keys` table, so the
+      saga does not store a second copy of it.
 - [ ] State transitions are guarded: a transition is a conditional
       `UPDATE ... WHERE state = $expected`. A lost race is a retry, never a double
       transition.

@@ -146,11 +146,10 @@ JavaScript.
 
 ### Wallet (`/v1/wallets`)
 
-**Stage 2 boundary.** The money endpoints below are served on the wallet's **internal
-port**, not the public edge, behind `X-Echo-Service-Token` and `X-Echo-Caller`. They
-are **not idempotent** until Stage 3: there is no `Idempotency-Key` yet, so a retried
-request is a second movement. Do not publish these routes before the gateway and
-idempotency land. The `Auth` column describes the target state from Stage 4.
+**Internal boundary.** The money endpoints below are served on the wallet's **internal
+port** (8182), not the public edge, behind `X-Echo-Service-Token` and `X-Echo-Caller`.
+Every money write requires an `Idempotency-Key`; the `Auth` column describes the
+target state from Stage 4.
 
 | Method | Path | Auth | Idempotent | Purpose |
 |---|---|---|---|---|
@@ -159,6 +158,14 @@ idempotency land. The `Auth` column describes the target state from Stage 4.
 | GET | `/{id}/holds` | owner | — | Open holds |
 | POST | `/{id}/fund` | owner or operator | required | Credit a wallet |
 | POST | `/{id}/withdraw` | owner | required | Debit a wallet |
+| POST | `/holds` | service | by `hold_id` | Reserve money for a saga |
+| POST | `/holds/{id}/capture` | service | by hold state | Turn a hold into a transaction |
+| POST | `/holds/{id}/release` | service | by hold state | Return a reservation |
+| POST | `/transactions/{id}/reverse` | service | by unique reversal | Compensate a capture |
+
+The hold and reversal routes are the saga's private surface; they are not part of the
+customer API. A hold changes `available_balance` and produces no entries. Only a
+capture posts a transaction, and it pays the held money into settlement.
 
 Wallet response:
 
@@ -203,27 +210,33 @@ transaction whose legs all touch the same account.
 
 ### Transfers (`/v1/transfers`)
 
+**Stage 3 (built).** `POST /transfers` opens a saga and returns `202 Accepted` with the
+saga id. It is served on the transfer service's **internal port** (8183) behind the
+service token, and it requires an `Idempotency-Key`. The `/internal` and `/external`
+routes below are the Stage 4 and Stage 8 surface; the atomic internal transfer already
+exists as the wallet's `POST /transfers/internal`.
+
 | Method | Path | Auth | Idempotent | Returns |
 |---|---|---|---|---|
+| POST | `/transfers` | service | required | `202` saga created |
+| GET | `/transfers/{id}` | service | — | Saga state |
 | POST | `/internal` | owner of source | required | `201` posted |
 | POST | `/external` | owner of source | required | `202` accepted |
-| GET | `/{id}` | owner | — | Saga or transaction state |
 
-Transfer states reported by `GET /v1/transfers/{id}`:
+Saga states reported by `GET /transfers/{id}` today:
 
 | State | Meaning | Terminal |
 |---|---|---|
-| `received` | Accepted, saga created | no |
+| `received` | Saga created; validation passed | no |
 | `reserved` | Funds held at source | no |
-| `sent` | Handed to the rail | no |
-| `completed` | Money moved, both sides | yes |
-| `failed` | No money moved, hold released | yes |
-| `unknown` | Outcome not yet known; resolving | no |
-| `reversed` | Moved, then reversed with evidence | yes |
+| `debited` | Hold captured; the remote outcome is not yet known | no |
+| `completed` | The destination applied the credit | yes |
+| `failed` | Nothing moved, or the debit was reversed | yes |
+| `resolving` | The destination said unknown; parked, never compensated | no |
 
-`unknown` is never collapsed into `failed`. A client that retries on `failed` is
-correct; a client that retries on `unknown` will receive `409` until the platform
-resolves it.
+`resolving` is never collapsed into `failed`: a replay of a rejection would reverse a
+debit that may have been applied remotely. The client-facing names (`sent`, `unknown`,
+`reversed`) arrive with the gateway's mapping in Stage 4.
 
 ### Disputes and statements (`/v1/commands`)
 

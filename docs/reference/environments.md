@@ -39,9 +39,11 @@ make reset   # destroy volumes, re-create, migrate, start
 | webhook | 8085 | 9085 |
 | recon | 8086 | 9086 |
 
-The wallet also serves its internal API on `:8182`, behind `WALLET_SERVICE_TOKEN`.
-`make up` defaults that token to `local-dev-service-token`; it has no default in the
-binary, and the port is never published in production.
+The wallet also serves its internal API on `:8182` and the transfer service on
+`:8183`, behind `WALLET_SERVICE_TOKEN` and `TRANSFER_SERVICE_TOKEN` respectively.
+`make up` defaults both to `local-dev-service-token`; neither has a default in the
+binary, and the ports are never published in production. The transfer service calls
+the wallet at `WALLET_URL` (default `http://localhost:8182`).
 
 Only the gateway's port is public. Postgres is on `:5432`, NATS on `:4222`
 (monitoring `:8222`), Redis on `:6379`. The service ports are for local

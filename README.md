@@ -8,14 +8,15 @@ Built from scratch. Not forked, not vendored. The design is informed by the
 `dev-marker/payments` teaching codebase, but every decision here is made again and
 written down.
 
-> **Status: Stages 0–2.** The specification is in `docs/` and the code is catching up:
-> seven services with a lifecycle, the ledger (accounts, transactions, entries and
-> derived balances), and fund, withdraw and internal-transfer endpoints. Holds, the
-> public edge and the transfer saga are later stages.
+> **Status: Stages 0–3.** The specification is in `docs/` and the code is catching up:
+> seven services with a lifecycle, the ledger, fund, withdraw and internal transfers,
+> idempotency keys on every money write, holds, and the transfer saga with a stub
+> destination. Its terminal event is written to the outbox; the relay that publishes
+> it is Stage 5.
 >
-> **The Stage 2 money endpoints are internal-only and not idempotent.** They are served
-> on the wallet's internal port behind a service token, and Stage 3 adds idempotency
-> keys. Do not expose them outside the network before then.
+> **Everything money-facing is still internal.** The wallet (8182) and transfer (8183)
+> APIs sit behind a service token on internal ports; the public edge arrives in
+> Stage 4. The destination is a stub until Stages 7 and 8.
 
 ---
 

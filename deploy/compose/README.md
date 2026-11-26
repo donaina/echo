@@ -11,6 +11,7 @@ images arrive with the deployment stage.
 | NATS | 4222 | JetStream enabled; monitoring on 8222 |
 | Redis | 6379 | Rate limits and short-lived state only |
 | Wallet internal API | 8182 | Served by the wallet process, not by compose; `X-Echo-Service-Token` required (`make up` defaults it to `local-dev-service-token`) |
+| Transfer internal API | 8183 | Served by the transfer process; same token; calls the wallet at `WALLET_URL` |
 
 Service ports are in `docs/reference/environments.md`.
 

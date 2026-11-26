@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
@@ -119,6 +120,80 @@ func (s *Service) Transfer(ctx context.Context, cmd TransferCommand, by, correla
 	}
 	return s.store.InternalTransfer(ctx, from, to, ledger.AmountMinor(cmd.AmountMinor), cmd.Currency,
 		strings.TrimSpace(cmd.Reference), by, correlationID)
+}
+
+// HoldCommand reserves money in a wallet.
+type HoldCommand struct {
+	HoldID      string
+	AccountID   string
+	AmountMinor int64
+	Currency    string
+	Reference   string
+	TTL         time.Duration
+}
+
+// PlaceHold reserves money for a transfer that has not settled yet.
+func (s *Service) PlaceHold(ctx context.Context, cmd HoldCommand, by string) (ledger.Hold, error) {
+	holdID, err := requireID("hold_id", cmd.HoldID)
+	if err != nil {
+		return ledger.Hold{}, err
+	}
+	accountID, err := requireID("account_id", cmd.AccountID)
+	if err != nil {
+		return ledger.Hold{}, err
+	}
+	if err := requireAmount(cmd.AmountMinor); err != nil {
+		return ledger.Hold{}, err
+	}
+	if err := requireCurrency(cmd.Currency); err != nil {
+		return ledger.Hold{}, err
+	}
+	if err := requireCaller(by); err != nil {
+		return ledger.Hold{}, err
+	}
+	ttl := cmd.TTL
+	if ttl == 0 {
+		ttl = 15 * time.Minute
+	}
+	if ttl < time.Second || ttl > 24*time.Hour {
+		return ledger.Hold{}, validation("ttl_seconds", "must be between 1 second and 24 hours")
+	}
+	return s.store.PlaceHold(ctx, holdID, accountID, ledger.AmountMinor(cmd.AmountMinor),
+		cmd.Currency, strings.TrimSpace(cmd.Reference), by, ttl)
+}
+
+// Capture turns a hold into money movement.
+func (s *Service) Capture(ctx context.Context, holdID string) (ledger.Hold, ledger.Transaction, error) {
+	id, err := requireID("hold_id", holdID)
+	if err != nil {
+		return ledger.Hold{}, ledger.Transaction{}, err
+	}
+	return s.store.Capture(ctx, id)
+}
+
+// Release returns a reservation without moving money.
+func (s *Service) Release(ctx context.Context, holdID string) (ledger.Hold, error) {
+	id, err := requireID("hold_id", holdID)
+	if err != nil {
+		return ledger.Hold{}, err
+	}
+	return s.store.Release(ctx, id)
+}
+
+// Reverse posts the equal-and-opposite transaction. Compensation uses it when
+// a remote destination rejects a debit that has already been captured.
+func (s *Service) Reverse(ctx context.Context, transactionID, reason, by, correlationID string) (ledger.Transaction, error) {
+	id, err := requireID("transaction_id", transactionID)
+	if err != nil {
+		return ledger.Transaction{}, err
+	}
+	if strings.TrimSpace(reason) == "" {
+		return ledger.Transaction{}, validation("reason", "must not be empty")
+	}
+	if err := requireCaller(by); err != nil {
+		return ledger.Transaction{}, err
+	}
+	return s.store.Reverse(ctx, id, by, correlationID, strings.TrimSpace(reason), time.Now().UTC())
 }
 
 // Wallet returns a customer wallet and its derived balances. A system account

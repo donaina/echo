@@ -17,6 +17,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/donaina/echo/internal/ledger"
+	"github.com/donaina/echo/internal/platform/idempotency"
 	"github.com/donaina/echo/internal/wallet"
 )
 
@@ -25,12 +26,19 @@ const testToken = "test-service-token"
 func setupHTTP(t *testing.T) (*httptest.Server, *wallet.Store, *pgxpool.Pool) {
 	t.Helper()
 	store, pool := setup(t)
-	srv := httptest.NewServer(wallet.NewHandler(wallet.NewService(store), testToken))
+	idem := idempotency.NewMiddleware(idempotency.NewStore(pool), nil)
+	srv := httptest.NewServer(wallet.NewHandler(wallet.NewService(store), testToken, idem))
 	t.Cleanup(srv.Close)
 	return srv, store, pool
 }
 
 func call(t *testing.T, srv *httptest.Server, method, path, body string, mutate ...func(*http.Request)) (int, []byte) {
+	t.Helper()
+	status, _, b := callHeaders(t, srv, method, path, body, mutate...)
+	return status, b
+}
+
+func callHeaders(t *testing.T, srv *httptest.Server, method, path, body string, mutate ...func(*http.Request)) (int, http.Header, []byte) {
 	t.Helper()
 	req, err := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
 	if err != nil {
@@ -40,6 +48,10 @@ func call(t *testing.T, srv *httptest.Server, method, path, body string, mutate 
 	req.Header.Set("X-Echo-Service-Token", testToken)
 	req.Header.Set("X-Echo-Caller", "test-suite")
 	req.Header.Set("X-Correlation-Id", "corr-"+ulid.Make().String())
+	// Every request gets its own key unless the test overrides it; the money
+	// routes require one, and uniqueness is what makes an ordinary test an
+	// ordinary request.
+	req.Header.Set("Idempotency-Key", "test-"+ulid.Make().String())
 	for _, m := range mutate {
 		m(req)
 	}
@@ -52,7 +64,7 @@ func call(t *testing.T, srv *httptest.Server, method, path, body string, mutate 
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	return resp.StatusCode, b
+	return resp.StatusCode, resp.Header, b
 }
 
 type problemBody struct {

@@ -5,18 +5,21 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	transfermigrations "github.com/donaina/echo/db/transfer"
 	"github.com/donaina/echo/internal/platform/config"
 	"github.com/donaina/echo/internal/platform/httpserver"
+	"github.com/donaina/echo/internal/platform/idempotency"
 	"github.com/donaina/echo/internal/platform/logging"
 	"github.com/donaina/echo/internal/platform/migrate"
 	"github.com/donaina/echo/internal/platform/postgres"
 	"github.com/donaina/echo/internal/platform/telemetry"
+	"github.com/donaina/echo/internal/transfer"
+	"github.com/donaina/echo/internal/transfer/walletclient"
 )
 
 // version is stamped at build time:
@@ -70,8 +73,23 @@ func run() error {
 		return nil
 	}
 
-	// A service refuses to serve a database older than the code it ships with.
 	if err := migrate.EnsureCurrent(ctx, pool, transfermigrations.Migrations); err != nil {
+		return err
+	}
+
+	// The inbound token guards this service's API; the wallet token is what
+	// it presents when it calls the wallet. Both are required: a service that
+	// cannot authenticate its calls has no safe default.
+	serviceToken := r.Required("TRANSFER_SERVICE_TOKEN")
+	walletToken := r.Required("WALLET_SERVICE_TOKEN")
+	walletURL := r.Required("WALLET_URL")
+	internalAddr := r.String("TRANSFER_INTERNAL_ADDR", ":8183")
+	if err := r.Err(); err != nil {
+		return err
+	}
+
+	wallet, err := walletclient.New(walletURL, walletToken)
+	if err != nil {
 		return err
 	}
 
@@ -95,11 +113,21 @@ func run() error {
 	probes.Add("postgres", postgres.Ready(pool))
 	probes.Ready()
 
+	store := transfer.NewStore(pool)
+	orchestrator := transfer.NewOrchestrator(store, wallet, transfer.NewStubDestination(), logger)
+	go orchestrator.Run(ctx)
+
+	idemStore := idempotency.NewStore(pool)
+	svc := transfer.NewService(store, orchestrator.Wake)
+	internal := transfer.NewHandler(svc, serviceToken, idempotency.NewMiddleware(idemStore, logger))
+	go sweep(ctx, logger, idemStore)
+
 	srv := httpserver.New(httpserver.Options{
 		Service:         "transfer",
 		Addr:            cfg.HTTPAddr,
+		InternalAddr:    internalAddr,
+		InternalHandler: internal,
 		MetricsAddr:     cfg.MetricsAddr,
-		Handler:         http.NewServeMux(),
 		Logger:          logger,
 		Probes:          probes,
 		Metrics:         tel.Metrics,
@@ -107,6 +135,23 @@ func run() error {
 		DrainDelay:      cfg.DrainDelay,
 		ShutdownTimeout: cfg.ShutdownTimeout,
 	})
-	logger.Info("starting", "addr", cfg.HTTPAddr, "metrics_addr", cfg.MetricsAddr)
+	logger.Info("starting",
+		"addr", cfg.HTTPAddr, "internal_addr", internalAddr,
+		"wallet", walletURL, "metrics_addr", cfg.MetricsAddr)
 	return srv.Run(ctx)
+}
+
+func sweep(ctx context.Context, logger *slog.Logger, keys *idempotency.Store) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := keys.Sweep(ctx); err != nil {
+				logger.Warn("sweep idempotency keys", "err", err)
+			}
+		}
+	}
 }

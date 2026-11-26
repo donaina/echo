@@ -9,3 +9,13 @@ sql:
         out: "internal/wallet/walletdb"
         sql_package: "pgx/v5"
         emit_pointers_for_null_types: true
+
+  - engine: "postgresql"
+    schema: "db/transfer/migrations"
+    queries: "db/transfer/queries"
+    gen:
+      go:
+        package: "transferdb"
+        out: "internal/transfer/transferdb"
+        sql_package: "pgx/v5"
+        emit_pointers_for_null_types: true

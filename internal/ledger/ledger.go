@@ -154,6 +154,33 @@ type Entry struct {
 	CreatedAt     time.Time
 }
 
+// HoldStatus is the lifecycle of a reservation.
+type HoldStatus string
+
+const (
+	HoldOpen     HoldStatus = "open"
+	HoldCaptured HoldStatus = "captured"
+	HoldReleased HoldStatus = "released"
+	HoldExpired  HoldStatus = "expired"
+)
+
+// Hold reserves part of an account's available balance without moving money.
+// Only a capture produces entries.
+type Hold struct {
+	ID            string
+	TenantID      string
+	AccountID     string
+	AmountMinor   AmountMinor
+	Currency      string
+	Reference     string
+	CreatedBy     string
+	Status        HoldStatus
+	TransactionID *string
+	ExpiresAt     time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 // Transaction is one atomic event: a set of entries that sum to zero.
 type Transaction struct {
 	ID            string
