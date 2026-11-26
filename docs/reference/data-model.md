@@ -45,9 +45,9 @@ from identity into money, and the wallet treats it as opaque.
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `accounts` | `id`, `owner_ref`, `account_type`, `currency`, `status`, `version` | See `ledger-model.md` |
-| `transactions` | `id`, `operation_type`, `status`, `occurred_at`, `value_date`, `reference`, `reverses_id` | Append-only except `status` and reversal link |
-| `entries` | `id`, `transaction_id`, `account_id`, `delta_minor`, `currency` | Append-only; no update, no delete grant |
+| `accounts` | `id`, `tenant_id`, `owner_ref`, `account_type`, `currency`, `status`, `version` | See `ledger-model.md` |
+| `transactions` | `id`, `tenant_id`, `operation_type`, `status`, `occurred_at`, `value_date`, `reference`, `reverses_id` | Append-only except `status` and reversal link |
+| `entries` | `id`, `tenant_id`, `transaction_id`, `account_id`, `delta_minor`, `currency` | Append-only; no update, no delete grant |
 | `holds` | `id`, `account_id`, `amount_minor`, `status`, `expires_at`, `transaction_id` | Lifecycle in `ledger-model.md` |
 | `balance_checkpoints` | `account_id`, `as_of_entry_id`, `balance_minor` | Verified cache; deletable |
 | `idempotency_keys` | `scope`, `idempotency_key` (unique together), `request_fingerprint`, `status` | Pruned 24h + retry window |

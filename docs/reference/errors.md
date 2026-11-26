@@ -64,6 +64,7 @@ A `5xx` never includes `meta` with internal state. A `4xx` may.
 | `token_expired` | 401 | Rejection | Access token past `exp`, refresh may work |
 | `forbidden` | 403 | Rejection | Authenticated but not permitted |
 | `account_not_found` | 404 | Rejection | Account id unknown to the caller |
+| `transaction_not_found` | 404 | Rejection | Transaction id unknown |
 | `transfer_not_found` | 404 | Rejection | Transfer id unknown |
 | `method_not_allowed` | 405 | Rejection | Wrong verb |
 | `conflict` | 409 | Rejection | State conflict (see the specific codes) |

@@ -27,8 +27,8 @@ func TestApplyFromEmptyAndRefuseToServeBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("latest: %v", err)
 	}
-	if want != 1 {
-		t.Fatalf("latest = %d, want the single baseline migration", want)
+	if want < 1 {
+		t.Fatalf("latest = %d, want at least the baseline migration", want)
 	}
 
 	if got, err := migrate.Version(ctx, pool); err != nil || got != 0 {
