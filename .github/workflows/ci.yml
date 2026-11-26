@@ -1,0 +1,53 @@
+# Every pull request, and every push to main: the same checks a reviewer runs.
+# A red gate stops the merge; a flaky gate is fixed, not retried into greenness.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make verify
+      - run: go mod verify
+      - run: go mod tidy -diff
+
+  # GitHub's Ubuntu runners have Docker, so testcontainers works here exactly
+  # as it does on a laptop.
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make test-integration
+
+  # The migrations apply from empty against the real stack, through the same
+  # init script a developer runs.
+  migrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: docker compose -f deploy/compose/docker-compose.yml up -d --wait postgres
+      - run: make migrate
+      - if: always()
+        run: docker compose -f deploy/compose/docker-compose.yml down -v
