@@ -63,6 +63,11 @@ available_balance = ledger_balance − Σ amount_minor of open holds
 
 The API reports both. A movement is permitted only against `available_balance`.
 
+Every writer of entries takes the account's row lock, in ascending account-id order,
+before it reads a balance or writes an entry. That lock — not the transaction's
+isolation level — is what makes "check, then debit" safe under concurrency, and it
+applies to reversals as well as to movements. See ADR 0009.
+
 ### Derivation at scale
 
 `ledger_balance` is computed as:

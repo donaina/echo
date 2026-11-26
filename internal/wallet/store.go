@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -139,6 +140,20 @@ func (s *Store) Reverse(ctx context.Context, originalID, by, correlationID, reas
 			return err
 		}
 
+		// A reversal writes entries, so it takes the same account locks a
+		// movement takes, in the same order. Without this, a reversal could
+		// slip a debit in behind another movement's balance check.
+		ids := make([]string, 0, len(entries))
+		for _, e := range entries {
+			ids = append(ids, e.AccountID)
+		}
+		slices.Sort(ids)
+		for _, id := range slices.Compact(ids) {
+			if _, err := q.LockAccount(ctx, id); err != nil {
+				return err
+			}
+		}
+
 		metadata, err := json.Marshal(map[string]string{"reason": reason})
 		if err != nil {
 			return err
@@ -206,6 +221,7 @@ func transactionFromRow(t walletdb.Transaction, entries []walletdb.Entry) ledger
 		CausationID:   t.CausationID,
 		CreatedBy:     t.CreatedBy,
 		ReversesID:    t.ReversesID,
+		Reference:     t.Reference,
 		Metadata:      json.RawMessage(t.Metadata),
 	}
 	for _, e := range entries {
@@ -234,6 +250,7 @@ func transactionParams(t ledger.Transaction) walletdb.CreateTransactionParams {
 		CausationID:   t.CausationID,
 		CreatedBy:     t.CreatedBy,
 		ReversesID:    t.ReversesID,
+		Reference:     t.Reference,
 		Metadata:      t.Metadata,
 	}
 }
@@ -246,6 +263,7 @@ func entryParams(e ledger.Entry) walletdb.CreateEntryParams {
 		AccountID:     e.AccountID,
 		DeltaMinor:    int64(e.DeltaMinor),
 		Currency:      e.Currency,
+		CreatedAt:     pgtype.Timestamptz{Time: e.CreatedAt, Valid: true},
 	}
 }
 

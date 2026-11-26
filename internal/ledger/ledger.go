@@ -102,6 +102,9 @@ type NewAccount struct {
 
 var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
 
+// ValidCurrency reports whether code has the shape of an ISO 4217 code.
+func ValidCurrency(code string) bool { return currencyCode.MatchString(code) }
+
 // OpenAccount validates a new account and gives it an ID. The owner rule is
 // part of the type: a wallet has an owner, a system account never does.
 func OpenAccount(n NewAccount) (Account, error) {
@@ -163,6 +166,7 @@ type Transaction struct {
 	CausationID   *string
 	CreatedBy     string
 	ReversesID    *string
+	Reference     string
 	Metadata      json.RawMessage
 	Entries       []Entry
 }
@@ -177,6 +181,7 @@ type NewTransaction struct {
 	CausationID   *string
 	CreatedBy     string
 	ReversesID    *string
+	Reference     string
 	Metadata      json.RawMessage
 }
 
@@ -239,6 +244,7 @@ func Build(legs []Leg, n NewTransaction) (Transaction, error) {
 		CausationID:   n.CausationID,
 		CreatedBy:     n.CreatedBy,
 		ReversesID:    n.ReversesID,
+		Reference:     n.Reference,
 		Metadata:      metadata(n.Metadata),
 	}
 	for _, leg := range legs {
@@ -249,6 +255,7 @@ func Build(legs []Leg, n NewTransaction) (Transaction, error) {
 			AccountID:     leg.AccountID,
 			DeltaMinor:    leg.DeltaMinor,
 			Currency:      leg.Currency,
+			CreatedAt:     n.OccurredAt,
 		})
 	}
 	return t, nil

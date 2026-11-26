@@ -12,8 +12,10 @@ import (
 )
 
 const createEntry = `-- name: CreateEntry :one
-INSERT INTO entries (id, tenant_id, transaction_id, account_id, delta_minor, currency)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO entries (
+    id, tenant_id, transaction_id, account_id, delta_minor, currency, created_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, tenant_id, transaction_id, account_id, delta_minor, currency, created_at
 `
 
@@ -24,6 +26,7 @@ type CreateEntryParams struct {
 	AccountID     string
 	DeltaMinor    int64
 	Currency      string
+	CreatedAt     pgtype.Timestamptz
 }
 
 func (q *Queries) CreateEntry(ctx context.Context, arg CreateEntryParams) (Entry, error) {
@@ -34,6 +37,7 @@ func (q *Queries) CreateEntry(ctx context.Context, arg CreateEntryParams) (Entry
 		arg.AccountID,
 		arg.DeltaMinor,
 		arg.Currency,
+		arg.CreatedAt,
 	)
 	var i Entry
 	err := row.Scan(
@@ -51,9 +55,9 @@ func (q *Queries) CreateEntry(ctx context.Context, arg CreateEntryParams) (Entry
 const createTransaction = `-- name: CreateTransaction :one
 INSERT INTO transactions (
     id, tenant_id, operation_type, status, occurred_at, value_date,
-    correlation_id, causation_id, created_by, reverses_id, metadata
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, tenant_id, operation_type, status, occurred_at, value_date, correlation_id, causation_id, created_by, reverses_id, metadata
+    correlation_id, causation_id, created_by, reverses_id, reference, metadata
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, tenant_id, operation_type, status, occurred_at, value_date, correlation_id, causation_id, created_by, reverses_id, metadata, reference
 `
 
 type CreateTransactionParams struct {
@@ -67,6 +71,7 @@ type CreateTransactionParams struct {
 	CausationID   *string
 	CreatedBy     string
 	ReversesID    *string
+	Reference     string
 	Metadata      []byte
 }
 
@@ -82,6 +87,7 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		arg.CausationID,
 		arg.CreatedBy,
 		arg.ReversesID,
+		arg.Reference,
 		arg.Metadata,
 	)
 	var i Transaction
@@ -97,12 +103,13 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.CreatedBy,
 		&i.ReversesID,
 		&i.Metadata,
+		&i.Reference,
 	)
 	return i, err
 }
 
 const getReversal = `-- name: GetReversal :one
-SELECT id, tenant_id, operation_type, status, occurred_at, value_date, correlation_id, causation_id, created_by, reverses_id, metadata FROM transactions WHERE reverses_id = $1
+SELECT id, tenant_id, operation_type, status, occurred_at, value_date, correlation_id, causation_id, created_by, reverses_id, metadata, reference FROM transactions WHERE reverses_id = $1
 `
 
 func (q *Queries) GetReversal(ctx context.Context, reversesID *string) (Transaction, error) {
@@ -120,12 +127,13 @@ func (q *Queries) GetReversal(ctx context.Context, reversesID *string) (Transact
 		&i.CreatedBy,
 		&i.ReversesID,
 		&i.Metadata,
+		&i.Reference,
 	)
 	return i, err
 }
 
 const getTransaction = `-- name: GetTransaction :one
-SELECT id, tenant_id, operation_type, status, occurred_at, value_date, correlation_id, causation_id, created_by, reverses_id, metadata FROM transactions WHERE id = $1
+SELECT id, tenant_id, operation_type, status, occurred_at, value_date, correlation_id, causation_id, created_by, reverses_id, metadata, reference FROM transactions WHERE id = $1
 `
 
 func (q *Queries) GetTransaction(ctx context.Context, id string) (Transaction, error) {
@@ -143,6 +151,7 @@ func (q *Queries) GetTransaction(ctx context.Context, id string) (Transaction, e
 		&i.CreatedBy,
 		&i.ReversesID,
 		&i.Metadata,
+		&i.Reference,
 	)
 	return i, err
 }
@@ -180,7 +189,7 @@ func (q *Queries) GetTransactionEntries(ctx context.Context, transactionID strin
 }
 
 const getTransactionForUpdate = `-- name: GetTransactionForUpdate :one
-SELECT id, tenant_id, operation_type, status, occurred_at, value_date, correlation_id, causation_id, created_by, reverses_id, metadata FROM transactions WHERE id = $1 FOR UPDATE
+SELECT id, tenant_id, operation_type, status, occurred_at, value_date, correlation_id, causation_id, created_by, reverses_id, metadata, reference FROM transactions WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetTransactionForUpdate(ctx context.Context, id string) (Transaction, error) {
@@ -198,8 +207,145 @@ func (q *Queries) GetTransactionForUpdate(ctx context.Context, id string) (Trans
 		&i.CreatedBy,
 		&i.ReversesID,
 		&i.Metadata,
+		&i.Reference,
 	)
 	return i, err
+}
+
+const listWalletEntriesAfter = `-- name: ListWalletEntriesAfter :many
+SELECT
+    e.id, e.tenant_id, e.transaction_id, e.account_id, e.delta_minor,
+    e.currency, e.created_at,
+    t.operation_type, t.reference,
+    COALESCE((SELECT e2.account_id FROM entries e2
+      WHERE e2.transaction_id = e.transaction_id AND e2.account_id <> e.account_id
+      ORDER BY e2.id LIMIT 1)::text, '') AS counterparty
+FROM entries e
+JOIN transactions t ON t.id = e.transaction_id
+WHERE e.account_id = $1
+  AND (e.created_at < $2 OR (e.created_at = $2 AND e.id < $3))
+ORDER BY e.created_at DESC, e.id DESC
+LIMIT $4
+`
+
+type ListWalletEntriesAfterParams struct {
+	AccountID string
+	CreatedAt pgtype.Timestamptz
+	ID        string
+	Limit     int32
+}
+
+type ListWalletEntriesAfterRow struct {
+	ID            string
+	TenantID      string
+	TransactionID string
+	AccountID     string
+	DeltaMinor    int64
+	Currency      string
+	CreatedAt     pgtype.Timestamptz
+	OperationType string
+	Reference     string
+	Counterparty  interface{}
+}
+
+func (q *Queries) ListWalletEntriesAfter(ctx context.Context, arg ListWalletEntriesAfterParams) ([]ListWalletEntriesAfterRow, error) {
+	rows, err := q.db.Query(ctx, listWalletEntriesAfter,
+		arg.AccountID,
+		arg.CreatedAt,
+		arg.ID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWalletEntriesAfterRow
+	for rows.Next() {
+		var i ListWalletEntriesAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.TransactionID,
+			&i.AccountID,
+			&i.DeltaMinor,
+			&i.Currency,
+			&i.CreatedAt,
+			&i.OperationType,
+			&i.Reference,
+			&i.Counterparty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWalletEntriesFirst = `-- name: ListWalletEntriesFirst :many
+SELECT
+    e.id, e.tenant_id, e.transaction_id, e.account_id, e.delta_minor,
+    e.currency, e.created_at,
+    t.operation_type, t.reference,
+    COALESCE((SELECT e2.account_id FROM entries e2
+      WHERE e2.transaction_id = e.transaction_id AND e2.account_id <> e.account_id
+      ORDER BY e2.id LIMIT 1)::text, '') AS counterparty
+FROM entries e
+JOIN transactions t ON t.id = e.transaction_id
+WHERE e.account_id = $1
+ORDER BY e.created_at DESC, e.id DESC
+LIMIT $2
+`
+
+type ListWalletEntriesFirstParams struct {
+	AccountID string
+	Limit     int32
+}
+
+type ListWalletEntriesFirstRow struct {
+	ID            string
+	TenantID      string
+	TransactionID string
+	AccountID     string
+	DeltaMinor    int64
+	Currency      string
+	CreatedAt     pgtype.Timestamptz
+	OperationType string
+	Reference     string
+	Counterparty  interface{}
+}
+
+func (q *Queries) ListWalletEntriesFirst(ctx context.Context, arg ListWalletEntriesFirstParams) ([]ListWalletEntriesFirstRow, error) {
+	rows, err := q.db.Query(ctx, listWalletEntriesFirst, arg.AccountID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWalletEntriesFirstRow
+	for rows.Next() {
+		var i ListWalletEntriesFirstRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.TransactionID,
+			&i.AccountID,
+			&i.DeltaMinor,
+			&i.Currency,
+			&i.CreatedAt,
+			&i.OperationType,
+			&i.Reference,
+			&i.Counterparty,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markTransactionReversed = `-- name: MarkTransactionReversed :execrows

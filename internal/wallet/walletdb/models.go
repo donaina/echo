@@ -42,4 +42,5 @@ type Transaction struct {
 	CreatedBy     string
 	ReversesID    *string
 	Metadata      []byte
+	Reference     string
 }

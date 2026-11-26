@@ -8,11 +8,14 @@ Built from scratch. Not forked, not vendored. The design is informed by the
 `dev-marker/payments` teaching codebase, but every decision here is made again and
 written down.
 
-> **Status: Stage 0.** The documentation set is the specification, and the skeleton
-> now exists: seven services with a lifecycle, the shared platform package, CI, and a
-> local stack with one database per service. Nothing moves money yet — the first
-> ledger table is Stage 1's, deliberately. Each later stage produces working software
-> that the previous stage's tests still pass against.
+> **Status: Stages 0–2.** The specification is in `docs/` and the code is catching up:
+> seven services with a lifecycle, the ledger (accounts, transactions, entries and
+> derived balances), and fund, withdraw and internal-transfer endpoints. Holds, the
+> public edge and the transfer saga are later stages.
+>
+> **The Stage 2 money endpoints are internal-only and not idempotent.** They are served
+> on the wallet's internal port behind a service token, and Stage 3 adds idempotency
+> keys. Do not expose them outside the network before then.
 
 ---
 

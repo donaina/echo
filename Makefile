@@ -77,11 +77,14 @@ up: infra build migrate
 		fi; \
 		url="postgres://echo_$${s}_app:echo_$${s}@localhost:5432/echo_$${s}?sslmode=disable"; \
 		nohup env "$$(echo $$s | tr '[:lower:]' '[:upper:]')_DATABASE_URL=$$url" \
+			WALLET_SERVICE_TOKEN="$${WALLET_SERVICE_TOKEN:-local-dev-service-token}" \
+			WALLET_INTERNAL_ADDR="$${WALLET_INTERNAL_ADDR:-:8182}" \
 			./bin/$$s >>$(RUN_DIR)/$$s.log 2>&1 & \
 		echo $$! > $(RUN_DIR)/$$s.pid; \
 		echo "$$s started (log: $(RUN_DIR)/$$s.log)"; \
 	done
 	@echo "health: http://localhost:8080/healthz   metrics: http://localhost:9080/metrics"
+	@echo "wallet internal API: http://localhost:8182 (X-Echo-Service-Token required)"
 
 ## Stop the services we started, then the stack. Data is kept.
 down:

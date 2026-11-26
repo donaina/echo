@@ -53,9 +53,11 @@ Every posting that depends on sufficiency follows the same shape:
 
 - [ ] A helper `withAccountLocks(ctx, store, ids []string, fn func() error) error`
       that implements steps 1–6 and is the only way to write a conditional movement.
-- [ ] It is a `SERIALIZABLE` transaction with bounded retry on serialization failure
-      (three attempts, jittered backoff), because locks plus serializable is the
-      belt-and-braces setting and the retry is cheap at this volume.
+- [ ] It is a `READ COMMITTED` transaction in which the row lock is the guarantee
+      (Article VIII permits locking or serializable). `SERIALIZABLE` was tried first
+      and rejected: every waiter's snapshot is stale by the time it acquires the lock,
+      so 200 concurrent withdrawals abort and retry in a storm. Retry remains, bounded
+      to three attempts, for a deadlock. See ADR 0009.
 - [ ] Lock ordering is a unit test: two opposite transfers in two goroutines must both
       complete.
 

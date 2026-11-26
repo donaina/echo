@@ -13,7 +13,7 @@ Echo is a payments platform built one stage at a time. The documentation in `doc
 
 Read the constitution before changing anything that touches money.
 
-**Current state: Stages 0 and 1.** Seven services with health and readiness probes, the shared `internal/platform` package, one database and role per service, and the ledger: accounts, transactions and entries, with balances derived from entries and the money rules enforced by database triggers. Holds, HTTP handlers and the transfer saga are later stages and must not be guessed ahead of them.
+**Current state: Stages 0–2.** Seven services with health and readiness probes, the shared `internal/platform` package, one database and role per service, the ledger (accounts, transactions, entries, derived balances), and the wallet's internal HTTP API: fund, withdraw, internal transfer, wallet and entry reads. Holds, the public edge and the transfer saga are later stages and must not be guessed ahead of them.
 
 ## Commands
 
@@ -70,6 +70,7 @@ These are the constitution's articles where they affect daily work:
 
 - Money is `int64` minor units with a currency. Never a float, a decimal, or an amount without its unit.
 - A balance is derived from entries. Never add a stored balance column; performance is addressed with verified checkpoints, and only in S6.
+- A debit is checked and written under the account's row lock. The lock, not the isolation level, is the guarantee (ADR 0009), and every entry writer — including a reversal — takes it, in ascending account-ID order.
 - Every transaction's entries sum to zero per currency. The ledger is append-only; corrections are reversals. The database enforces both with triggers: passing the Go layer is not enough.
 - Every money write is idempotent. A timeout is `Unknown`, never `Failed`; `internal/platform/errors` maps `context.DeadlineExceeded` to `outcome_unknown` and no code may collapse that into a retryable failure.
 - Events leave through the transactional outbox. Never publish to NATS from a request path.
@@ -82,6 +83,7 @@ These are the constitution's articles where they affect daily work:
 - **Logs**: structured `slog` carrying `request_id` and `correlation_id`. No amounts, account numbers, tokens, or request bodies in log lines.
 - **Metrics**: named `echo_<subsystem>_<name>_<unit>`. Labels stay bounded — route patterns, never raw paths or account ids.
 - **Migrations**: goose, one directory per service, forward-only in production. Adding a non-null column to a large table is three migrations, not one.
+- **Money writes**: a balance-checked movement goes through `withAccountLocks`; it is the only path that takes `FOR UPDATE`, and it locks in sorted order. Do not add another writer of entries that bypasses it.
 - **Tests**: integration tests carry `//go:build integration` and use `internal/platform/testkit` for containers. Tests build state through the ledger; they never insert entries directly.
 - **Dependencies**: the standard library first. A new dependency is a permanent cost and needs a reason in the pull request.
 
@@ -94,7 +96,7 @@ These are the constitution's articles where they affect daily work:
 
 ## Local stack
 
-`make up` provides PostgreSQL 17 on 5432 (one database and role per service), NATS with JetStream on 4222 (monitoring 8222), and Redis on 6379. Service ports are HTTP/metrics: gateway 8080/9080, auth 8081/9081, wallet 8082/9082, transfer 8083/9083, notification 8084/9084, webhook 8085/9085, recon 8086/9086. Only the gateway is public in production. `deploy/compose/README.md` has the local credentials and the reset procedure.
+`make up` provides PostgreSQL 17 on 5432 (one database and role per service), NATS with JetStream on 4222 (monitoring 8222), and Redis on 6379. Service ports are HTTP/metrics: gateway 8080/9080, auth 8081/9081, wallet 8082/9082, transfer 8083/9083, notification 8084/9084, webhook 8085/9085, recon 8086/9086. The wallet's money API is on its internal port, 8182, behind `X-Echo-Service-Token` (`make up` defaults it to `local-dev-service-token`) and requires `X-Echo-Caller`. Only the gateway is public in production. `deploy/compose/README.md` has the local credentials and the reset procedure.
 
 ## Deliberately deferred
 

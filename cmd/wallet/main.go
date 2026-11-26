@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +16,7 @@ import (
 	"github.com/donaina/echo/internal/platform/migrate"
 	"github.com/donaina/echo/internal/platform/postgres"
 	"github.com/donaina/echo/internal/platform/telemetry"
+	"github.com/donaina/echo/internal/wallet"
 )
 
 // version is stamped at build time:
@@ -75,6 +75,14 @@ func run() error {
 		return err
 	}
 
+	// The internal API is behind a temporary shared token until Stage 4
+	// replaces it with mTLS and a signed caller identity. It has no default.
+	serviceToken := r.Required("WALLET_SERVICE_TOKEN")
+	internalAddr := r.String("WALLET_INTERNAL_ADDR", ":8182")
+	if err := r.Err(); err != nil {
+		return err
+	}
+
 	tel, err := telemetry.Setup(ctx, telemetry.Options{
 		Service: "wallet",
 		Version: version,
@@ -95,11 +103,17 @@ func run() error {
 	probes.Add("postgres", postgres.Ready(pool))
 	probes.Ready()
 
+	// The public port serves health and nothing else until Stage 4. The money
+	// API lives on the internal port, behind the service token.
+	svc := wallet.NewService(wallet.NewStore(pool))
+	internal := wallet.NewHandler(svc, serviceToken)
+
 	srv := httpserver.New(httpserver.Options{
 		Service:         "wallet",
 		Addr:            cfg.HTTPAddr,
+		InternalAddr:    internalAddr,
+		InternalHandler: internal,
 		MetricsAddr:     cfg.MetricsAddr,
-		Handler:         http.NewServeMux(),
 		Logger:          logger,
 		Probes:          probes,
 		Metrics:         tel.Metrics,
@@ -107,6 +121,7 @@ func run() error {
 		DrainDelay:      cfg.DrainDelay,
 		ShutdownTimeout: cfg.ShutdownTimeout,
 	})
-	logger.Info("starting", "addr", cfg.HTTPAddr, "metrics_addr", cfg.MetricsAddr)
+	logger.Info("starting",
+		"addr", cfg.HTTPAddr, "internal_addr", internalAddr, "metrics_addr", cfg.MetricsAddr)
 	return srv.Run(ctx)
 }

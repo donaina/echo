@@ -38,10 +38,15 @@ type Options struct {
 	Addr        string
 	MetricsAddr string
 	Handler     http.Handler
-	Logger      *slog.Logger
-	Probes      *Probes
-	Metrics     http.Handler
-	Registry    prometheus.Registerer
+	// InternalAddr and InternalHandler add a second listener for
+	// service-to-service traffic. It shares the lifecycle and the
+	// middleware, but not the public routes.
+	InternalAddr    string
+	InternalHandler http.Handler
+	Logger          *slog.Logger
+	Probes          *Probes
+	Metrics         http.Handler
+	Registry        prometheus.Registerer
 
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
@@ -54,12 +59,13 @@ type Options struct {
 
 // Server is an HTTP server with the platform's lifecycle.
 type Server struct {
-	opts    Options
-	probes  *Probes
-	log     *slog.Logger
-	handler http.Handler
-	http    *http.Server
-	metrics *http.Server
+	opts     Options
+	probes   *Probes
+	log      *slog.Logger
+	handler  http.Handler
+	http     *http.Server
+	internal *http.Server
+	metrics  *http.Server
 }
 
 // New builds the server and its middleware. It does not listen.
@@ -99,7 +105,8 @@ func New(o Options) *Server {
 	}
 
 	s := &Server{opts: o, probes: o.Probes, log: o.Logger}
-	s.handler = s.instrument(mux, newMetrics(o.Service, o.Registry))
+	m := newMetrics(o.Service, o.Registry)
+	s.handler = s.instrument(mux, m)
 	s.http = &http.Server{
 		Addr:              o.Addr,
 		Handler:           s.handler,
@@ -109,6 +116,25 @@ func New(o Options) *Server {
 		IdleTimeout:       o.IdleTimeout,
 		MaxHeaderBytes:    o.MaxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(o.Logger.Handler(), slog.LevelWarn),
+	}
+	if o.InternalHandler != nil && o.InternalAddr != "" {
+		base := o.InternalHandler
+		if _, ok := base.(*http.ServeMux); !ok {
+			im := http.NewServeMux()
+			im.Handle("/", base)
+			base = im
+		}
+		im, _ := base.(*http.ServeMux)
+		s.internal = &http.Server{
+			Addr:              o.InternalAddr,
+			Handler:           s.instrument(im, m),
+			ReadHeaderTimeout: o.ReadHeaderTimeout,
+			ReadTimeout:       o.ReadTimeout,
+			WriteTimeout:      o.WriteTimeout,
+			IdleTimeout:       o.IdleTimeout,
+			MaxHeaderBytes:    o.MaxHeaderBytes,
+			ErrorLog:          slog.NewLogLogger(o.Logger.Handler(), slog.LevelWarn),
+		}
 	}
 	if o.Metrics != nil && o.MetricsAddr != "" {
 		mm := http.NewServeMux()
@@ -132,24 +158,34 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.opts.Addr, err)
 	}
-	var mln net.Listener
+	var mln, iln net.Listener
+	if s.internal != nil {
+		iln, err = net.Listen("tcp", s.opts.InternalAddr)
+		if err != nil {
+			_ = ln.Close()
+			return fmt.Errorf("listen internal %s: %w", s.opts.InternalAddr, err)
+		}
+	}
 	if s.metrics != nil {
 		mln, err = net.Listen("tcp", s.opts.MetricsAddr)
 		if err != nil {
 			_ = ln.Close()
+			if iln != nil {
+				_ = iln.Close()
+			}
 			return fmt.Errorf("listen metrics %s: %w", s.opts.MetricsAddr, err)
 		}
 	}
-	return s.serve(ctx, ln, mln)
+	return s.serve(ctx, ln, iln, mln)
 }
 
 // Serve runs on an existing listener, which is how tests pick a free port.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
-	return s.serve(ctx, ln, nil)
+	return s.serve(ctx, ln, nil, nil)
 }
 
-func (s *Server) serve(ctx context.Context, ln, mln net.Listener) error {
-	errCh := make(chan error, 2)
+func (s *Server) serve(ctx context.Context, ln, iln, mln net.Listener) error {
+	errCh := make(chan error, 3)
 	go func() {
 		err := s.http.Serve(ln)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -157,6 +193,15 @@ func (s *Server) serve(ctx context.Context, ln, mln net.Listener) error {
 		}
 		errCh <- err
 	}()
+	if iln != nil {
+		go func() {
+			err := s.internal.Serve(iln)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			}
+			errCh <- err
+		}()
+	}
 	if mln != nil {
 		go func() {
 			err := s.metrics.Serve(mln)
@@ -166,7 +211,8 @@ func (s *Server) serve(ctx context.Context, ln, mln net.Listener) error {
 			errCh <- err
 		}()
 	}
-	s.log.Info("listening", "addr", ln.Addr().String(), "metrics_addr", s.opts.MetricsAddr)
+	s.log.Info("listening", "addr", ln.Addr().String(),
+		"internal_addr", s.opts.InternalAddr, "metrics_addr", s.opts.MetricsAddr)
 
 	select {
 	case <-ctx.Done():
@@ -177,6 +223,9 @@ func (s *Server) serve(ctx context.Context, ln, mln net.Listener) error {
 		defer cancel()
 		var errs []error
 		errs = append(errs, s.http.Shutdown(shutCtx))
+		if s.internal != nil {
+			errs = append(errs, s.internal.Shutdown(shutCtx))
+		}
 		if s.metrics != nil {
 			errs = append(errs, s.metrics.Shutdown(shutCtx))
 		}
